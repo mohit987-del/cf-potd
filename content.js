@@ -60,6 +60,10 @@ class CFCalendar {
     this.minDate = new Date(this.currentDate);
     this.minDate.setMonth(this.minDate.getMonth() - 3);
     this.allProblems = null;
+    this.username = null;
+    this.solvedProblems = new Map(); // Map of dateString -> problem
+    this.problemsForDates = new Map(); // Map of dateString -> problem info
+    this.monthStats = { solved: 0, total: 0, streak: 0 };
     
     this.init();
   }
@@ -73,9 +77,21 @@ class CFCalendar {
     return istTime;
   }
 
-  init() {
+  /**
+   * Get saved username
+   */
+  async getUsername() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['cfUsername'], (data) => {
+        resolve(data.cfUsername || null);
+      });
+    });
+  }
+
+  async init() {
+    this.username = await this.getUsername();
     this.createCalendarContainer();
-    this.renderCalendar();
+    await this.renderCalendar();
     this.attachEventListeners();
   }
 
@@ -87,6 +103,16 @@ class CFCalendar {
       <div class="calendar-header">
         <h3>📅 POTD Calendar</h3>
         <button class="calendar-toggle" id="calendar-toggle">−</button>
+      </div>
+      <div class="calendar-stats" id="calendar-stats">
+        <div class="stat-item">
+          <span class="stat-label">Solved:</span>
+          <span class="stat-value" id="solved-count">0/0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">🔥 Streak:</span>
+          <span class="stat-value" id="streak-count">0</span>
+        </div>
       </div>
       <div class="calendar-content" id="calendar-content">
         <div class="calendar-nav">
@@ -139,18 +165,18 @@ class CFCalendar {
     }
   }
 
-  changeMonth(delta) {
+  async changeMonth(delta) {
     const newDate = new Date(this.selectedDate);
     newDate.setMonth(newDate.getMonth() + delta);
 
     // Check if new date is within allowed range
     if (newDate >= this.minDate && newDate <= this.currentDate) {
       this.selectedDate = newDate;
-      this.renderCalendar();
+      await this.renderCalendar();
     }
   }
 
-  renderCalendar() {
+  async renderCalendar() {
     const monthYearEl = document.getElementById('current-month');
     const gridEl = document.getElementById('calendar-grid');
 
@@ -180,6 +206,9 @@ class CFCalendar {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
+    // Load problems for this month and check solved status
+    await this.loadProblemsForMonth(year, month, daysInMonth);
+
     // Add empty cells for days before month starts
     for (let i = 0; i < firstDay; i++) {
       const emptyCell = document.createElement('div');
@@ -191,6 +220,9 @@ class CFCalendar {
     const today = this.getISTDate();
     today.setHours(0, 0, 0, 0); // Normalize to start of day
     
+    let currentStreak = 0;
+    let maxStreak = 0;
+    
     for (let day = 1; day <= daysInMonth; day++) {
       const dayCell = document.createElement('div');
       dayCell.className = 'calendar-day';
@@ -198,6 +230,7 @@ class CFCalendar {
 
       // Create date at noon to avoid timezone issues
       const cellDate = new Date(year, month, day, 12, 0, 0);
+      const dateString = this.getDateString(cellDate);
       
       // Mark today
       const cellDateStart = new Date(year, month, day);
@@ -218,6 +251,44 @@ class CFCalendar {
         dayCell.classList.add('disabled');
       }
 
+      // Get problem info for this date
+      const problemInfo = this.problemsForDates.get(dateString);
+      
+      if (problemInfo && cellDateStart <= today && cellDateStart >= minDateStart) {
+        // Check if solved
+        const isSolved = this.solvedProblems.has(dateString);
+        
+        if (isSolved) {
+          dayCell.classList.add('solved');
+          currentStreak++;
+          maxStreak = Math.max(maxStreak, currentStreak);
+        } else {
+          currentStreak = 0;
+        }
+        
+        // Add difficulty color coding
+        const rating = problemInfo.rating;
+        if (rating >= 1400 && rating < 1600) {
+          dayCell.classList.add('difficulty-easy');
+        } else if (rating >= 1600 && rating < 1800) {
+          dayCell.classList.add('difficulty-medium');
+        } else if (rating >= 1800) {
+          dayCell.classList.add('difficulty-hard');
+        }
+        
+        // Add tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'calendar-tooltip';
+        tooltip.innerHTML = `
+          <div class="tooltip-title">${problemInfo.name}</div>
+          <div class="tooltip-meta">
+            <span class="tooltip-rating">⭐ ${problemInfo.rating}</span>
+            <span class="tooltip-status">${isSolved ? '✓ Solved' : '⏳ Unsolved'}</span>
+          </div>
+        `;
+        dayCell.appendChild(tooltip);
+      }
+
       // Add click handler for valid dates
       if (cellDateStart <= today && cellDateStart >= minDateStart) {
         dayCell.addEventListener('click', () => this.onDateClick(cellDate, dayCell));
@@ -225,6 +296,120 @@ class CFCalendar {
       }
 
       gridEl.appendChild(dayCell);
+    }
+    
+    // Update streak in stats
+    this.monthStats.streak = maxStreak;
+    this.updateStats();
+  }
+
+  /**
+   * Load problems for the month and check solved status
+   */
+  async loadProblemsForMonth(year, month, daysInMonth) {
+    // Reset stats
+    this.monthStats = { solved: 0, total: 0, streak: 0 };
+    this.problemsForDates.clear();
+    this.solvedProblems.clear();
+    
+    if (!this.username) {
+      return; // Can't check solved status without username
+    }
+    
+    try {
+      // Get all problems if not loaded
+      if (!this.allProblems) {
+        const cachedProblems = await this.getCachedProblems();
+        
+        if (cachedProblems && cachedProblems.length > 0) {
+          this.allProblems = cachedProblems;
+        } else {
+          const result = await CodeforcesAPI.fetchContestProblems();
+          this.allProblems = CodeforcesAPI.filterProblems(result);
+          await this.cacheProblems(this.allProblems);
+        }
+      }
+      
+      // Get user's solved problems
+      const userSubmissions = await this.getUserSubmissions(this.username);
+      
+      // For each day in the month, get the problem and check if solved
+      const today = this.getISTDate();
+      today.setHours(0, 0, 0, 0);
+      
+      for (let day = 1; day <= daysInMonth; day++) {
+        const cellDate = new Date(year, month, day, 12, 0, 0);
+        const cellDateStart = new Date(year, month, day);
+        cellDateStart.setHours(0, 0, 0, 0);
+        
+        // Only process valid dates
+        const minDateStart = new Date(this.minDate);
+        minDateStart.setHours(0, 0, 0, 0);
+        
+        if (cellDateStart <= today && cellDateStart >= minDateStart) {
+          const dateString = this.getDateString(cellDate);
+          const problem = this.getDailyProblem(this.allProblems, dateString);
+          
+          // Store problem info
+          this.problemsForDates.set(dateString, {
+            name: problem.name,
+            rating: problem.rating,
+            contestId: problem.contestId,
+            index: problem.index
+          });
+          
+          this.monthStats.total++;
+          
+          // Check if solved
+          const isSolved = userSubmissions.some(sub => 
+            sub.problem.contestId === problem.contestId &&
+            sub.problem.index === problem.index &&
+            sub.verdict === 'OK'
+          );
+          
+          if (isSolved) {
+            this.solvedProblems.set(dateString, problem);
+            this.monthStats.solved++;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading problems for month:', error);
+    }
+  }
+
+  /**
+   * Get user submissions
+   */
+  async getUserSubmissions(username) {
+    try {
+      const response = await fetch(`https://codeforces.com/api/user.status?handle=${username}&from=1&count=1000`);
+      const data = await response.json();
+      
+      if (data.status !== 'OK') {
+        return [];
+      }
+      
+      return data.result;
+    } catch (error) {
+      console.error('Error fetching user submissions:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Update stats display
+   */
+  updateStats() {
+    const solvedCountEl = document.getElementById('solved-count');
+    const streakCountEl = document.getElementById('streak-count');
+    
+    if (solvedCountEl) {
+      solvedCountEl.textContent = `${this.monthStats.solved}/${this.monthStats.total}`;
+    }
+    
+    if (streakCountEl) {
+      streakCountEl.textContent = this.monthStats.streak;
     }
   }
 
