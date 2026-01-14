@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Codeforces Problem of the Day",
+  "version": "1.0.0",
+  "description": "Get a daily problem from Codeforces (rating 1400-1900)",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://codeforces.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CF Problem of the Day</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎯 Codeforces POTD</h1>
+      <p class="subtitle">Problem of the Day</p>
+    </header>
+
+    <div id="username-setup" class="username-setup hidden">
+      <div class="setup-content">
+        <p class="setup-title">Welcome! 👋</p>
+        <p class="setup-description">Enter your Codeforces username to track your progress automatically.</p>
+        <input type="text" id="username-input" class="username-input" placeholder="Your Codeforces handle" />
+        <button id="save-username-btn" class="btn btn-primary">Save Username</button>
+        <p class="error-text hidden" id="username-error"></p>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Loading today's problem...</p>
+    </div>
+
+    <div id="error" class="error hidden">
+      <p class="error-message"></p>
+      <button id="retry-btn" class="btn">Retry</button>
+    </div>
+
+    <div id="problem-content" class="problem-content hidden">
+      <div class="problem-header">
+        <h2 id="problem-title"></h2>
+        <div class="problem-meta">
+          <span class="rating-badge blurred" id="problem-rating">Reveal Rating</span>
+        </div>
+      </div>
+
+      <div class="completion-status" id="completion-status">
+        <div class="status-badge" id="status-badge">
+          <span class="status-icon">⏳</span>
+          <span class="status-text">Checking status...</span>
+        </div>
+      </div>
+
+      <div class="problem-tags blurred" id="problem-tags"></div>
+
+      <div class="actions">
+        <a id="solve-btn" class="btn btn-primary" href="#" target="_blank">
+          Solve Problem
+        </a>
+      </div>
+
+      <div class="info">
+        <p class="date-info">Problem for: <span id="current-date"></span></p>
+        <p class="timer-info">Next POTD in: <span id="countdown-timer">00:00:00</span></p>
+        <button id="change-username-btn" class="btn-link">Change Username</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="api.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
