@@ -109,6 +109,7 @@ function getDailyProblem(problems, date) {
   // Use date as seed for consistent daily selection
   const seed = date.split('-').reduce((acc, val) => acc + parseInt(val), 0);
   const index = seed % problems.length;
+  console.log('Popup - Date:', date, 'Seed:', seed, 'Index:', index, 'Total problems:', problems.length, 'Problem:', problems[index].name);
   return problems[index];
 }
 
