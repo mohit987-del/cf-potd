@@ -64,6 +64,7 @@ class CFCalendar {
     this.solvedProblems = new Map(); // Map of dateString -> problem
     this.problemsForDates = new Map(); // Map of dateString -> problem info
     this.monthStats = { solved: 0, total: 0, streak: 0 };
+    this.isRendering = false; // Prevent multiple simultaneous renders
     
     this.init();
   }
@@ -91,7 +92,12 @@ class CFCalendar {
   async init() {
     this.username = await this.getUsername();
     this.createCalendarContainer();
-    await this.renderCalendar();
+    
+    // Load all data upfront for the entire 3-month range
+    await this.loadAllData();
+    
+    // Now render with pre-loaded data
+    this.renderCalendar();
     this.attachEventListeners();
   }
 
@@ -166,17 +172,22 @@ class CFCalendar {
   }
 
   async changeMonth(delta) {
+    if (this.isRendering) return; // Prevent multiple simultaneous renders
+    
     const newDate = new Date(this.selectedDate);
     newDate.setMonth(newDate.getMonth() + delta);
 
     // Check if new date is within allowed range
     if (newDate >= this.minDate && newDate <= this.currentDate) {
       this.selectedDate = newDate;
-      await this.renderCalendar();
+      this.renderCalendar();
     }
   }
 
-  async renderCalendar() {
+  renderCalendar() {
+    if (this.isRendering) return; // Prevent duplicate renders
+    this.isRendering = true;
+    
     const monthYearEl = document.getElementById('current-month');
     const gridEl = document.getElementById('calendar-grid');
 
@@ -206,8 +217,8 @@ class CFCalendar {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    // Load problems for this month and check solved status
-    await this.loadProblemsForMonth(year, month, daysInMonth);
+    // Calculate stats for this month
+    this.calculateMonthStats(year, month, daysInMonth);
 
     // Add empty cells for days before month starts
     for (let i = 0; i < firstDay; i++) {
@@ -219,9 +230,6 @@ class CFCalendar {
     // Add day cells
     const today = this.getISTDate();
     today.setHours(0, 0, 0, 0); // Normalize to start of day
-    
-    let currentStreak = 0;
-    let maxStreak = 0;
     
     for (let day = 1; day <= daysInMonth; day++) {
       const dayCell = document.createElement('div');
@@ -251,7 +259,7 @@ class CFCalendar {
         dayCell.classList.add('disabled');
       }
 
-      // Get problem info for this date
+      // Get problem info for this date (already loaded)
       const problemInfo = this.problemsForDates.get(dateString);
       
       if (problemInfo && cellDateStart <= today && cellDateStart >= minDateStart) {
@@ -260,10 +268,6 @@ class CFCalendar {
         
         if (isSolved) {
           dayCell.classList.add('solved');
-          currentStreak++;
-          maxStreak = Math.max(maxStreak, currentStreak);
-        } else {
-          currentStreak = 0;
         }
         
         // Add difficulty color coding
@@ -298,84 +302,105 @@ class CFCalendar {
       gridEl.appendChild(dayCell);
     }
     
-    // Update streak in stats
-    this.monthStats.streak = maxStreak;
     this.updateStats();
+    this.isRendering = false;
   }
 
   /**
-   * Load problems for the month and check solved status
+   * Load all data upfront for the entire 3-month range
    */
-  async loadProblemsForMonth(year, month, daysInMonth) {
-    // Reset stats
-    this.monthStats = { solved: 0, total: 0, streak: 0 };
-    this.problemsForDates.clear();
-    this.solvedProblems.clear();
-    
+  async loadAllData() {
     if (!this.username) {
       return; // Can't check solved status without username
     }
     
     try {
       // Get all problems if not loaded
-      if (!this.allProblems) {
-        const cachedProblems = await this.getCachedProblems();
-        
-        if (cachedProblems && cachedProblems.length > 0) {
-          this.allProblems = cachedProblems;
-        } else {
-          const result = await CodeforcesAPI.fetchContestProblems();
-          this.allProblems = CodeforcesAPI.filterProblems(result);
-          await this.cacheProblems(this.allProblems);
-        }
+      const cachedProblems = await this.getCachedProblems();
+      
+      if (cachedProblems && cachedProblems.length > 0) {
+        this.allProblems = cachedProblems;
+      } else {
+        const result = await CodeforcesAPI.fetchContestProblems();
+        this.allProblems = CodeforcesAPI.filterProblems(result);
+        await this.cacheProblems(this.allProblems);
       }
       
-      // Get user's solved problems
+      // Get user's solved problems once
       const userSubmissions = await this.getUserSubmissions(this.username);
       
-      // For each day in the month, get the problem and check if solved
-      const today = this.getISTDate();
-      today.setHours(0, 0, 0, 0);
+      // Pre-calculate for all dates in the 3-month range
+      const currentDate = this.getISTDate();
+      const startDate = new Date(this.minDate);
+      startDate.setHours(0, 0, 0, 0);
       
-      for (let day = 1; day <= daysInMonth; day++) {
-        const cellDate = new Date(year, month, day, 12, 0, 0);
-        const cellDateStart = new Date(year, month, day);
-        cellDateStart.setHours(0, 0, 0, 0);
+      // Iterate through all dates from minDate to today
+      for (let d = new Date(startDate); d <= currentDate; d.setDate(d.getDate() + 1)) {
+        const cellDate = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
+        const dateString = this.getDateString(cellDate);
+        const problem = this.getDailyProblem(this.allProblems, dateString);
         
-        // Only process valid dates
-        const minDateStart = new Date(this.minDate);
-        minDateStart.setHours(0, 0, 0, 0);
+        // Store problem info
+        this.problemsForDates.set(dateString, {
+          name: problem.name,
+          rating: problem.rating,
+          contestId: problem.contestId,
+          index: problem.index
+        });
         
-        if (cellDateStart <= today && cellDateStart >= minDateStart) {
-          const dateString = this.getDateString(cellDate);
-          const problem = this.getDailyProblem(this.allProblems, dateString);
-          
-          // Store problem info
-          this.problemsForDates.set(dateString, {
-            name: problem.name,
-            rating: problem.rating,
-            contestId: problem.contestId,
-            index: problem.index
-          });
-          
-          this.monthStats.total++;
-          
-          // Check if solved
-          const isSolved = userSubmissions.some(sub => 
-            sub.problem.contestId === problem.contestId &&
-            sub.problem.index === problem.index &&
-            sub.verdict === 'OK'
-          );
-          
-          if (isSolved) {
-            this.solvedProblems.set(dateString, problem);
-            this.monthStats.solved++;
-          }
+        // Check if solved
+        const isSolved = userSubmissions.some(sub => 
+          sub.problem.contestId === problem.contestId &&
+          sub.problem.index === problem.index &&
+          sub.verdict === 'OK'
+        );
+        
+        if (isSolved) {
+          this.solvedProblems.set(dateString, problem);
         }
       }
     } catch (error) {
-      console.error('Error loading problems for month:', error);
+      console.error('Error loading calendar data:', error);
     }
+  }
+
+  /**
+   * Calculate stats for a specific month
+   */
+  calculateMonthStats(year, month, daysInMonth) {
+    this.monthStats = { solved: 0, total: 0, streak: 0 };
+    
+    const today = this.getISTDate();
+    today.setHours(0, 0, 0, 0);
+    const minDateStart = new Date(this.minDate);
+    minDateStart.setHours(0, 0, 0, 0);
+    
+    let currentStreak = 0;
+    let maxStreak = 0;
+    
+    for (let day = 1; day <= daysInMonth; day++) {
+      const cellDate = new Date(year, month, day, 12, 0, 0);
+      const cellDateStart = new Date(year, month, day);
+      cellDateStart.setHours(0, 0, 0, 0);
+      
+      if (cellDateStart <= today && cellDateStart >= minDateStart) {
+        const dateString = this.getDateString(cellDate);
+        
+        if (this.problemsForDates.has(dateString)) {
+          this.monthStats.total++;
+          
+          if (this.solvedProblems.has(dateString)) {
+            this.monthStats.solved++;
+            currentStreak++;
+            maxStreak = Math.max(maxStreak, currentStreak);
+          } else {
+            currentStreak = 0;
+          }
+        }
+      }
+    }
+    
+    this.monthStats.streak = maxStreak;
   }
 
   /**
